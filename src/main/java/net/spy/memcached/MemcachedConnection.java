@@ -46,6 +46,7 @@ import java.util.concurrent.LinkedBlockingQueue;
 
 import net.spy.memcached.compat.SpyObject;
 import net.spy.memcached.compat.log.LoggerFactory;
+import net.spy.memcached.internal.MigrationMode;
 import net.spy.memcached.internal.ReconnDelay;
 import net.spy.memcached.ops.KeyedOperation;
 import net.spy.memcached.ops.Operation;
@@ -89,6 +90,12 @@ public final class MemcachedConnection extends SpyObject {
 
 	private BlockingQueue<String> _nodeManageQueue = new LinkedBlockingQueue<String>();
 	private final ConnectionFactory f;
+
+	/* ENABLE_MIGRATION if */
+    private BlockingQueue<String> _migrationManageQueue = new LinkedBlockingQueue<String>();
+    private MigrationMode _migrationMode;
+
+    /* ENABLE_MIGRATION end */
 	
 	/* ENABLE_REPLICATION if */
 	private boolean arcusReplEnabled;
@@ -241,6 +248,7 @@ public final class MemcachedConnection extends SpyObject {
 
 		// Deal with the memcached server group that's been added by CacheManager.  
 		handleNodeManageQueue();
+		handleMigrationManageQueue();
 		
 		if(!shutDown && !reconnectQueue.isEmpty()) {
 			attemptReconnects();
@@ -523,6 +531,43 @@ public final class MemcachedConnection extends SpyObject {
 			}
 		}
 	}
+
+	private void updateMigrations(List<InetSocketAddress> addrs) throws IOException {
+		List<MemcachedNode> attachNode = new ArrayList<MemcachedNode>();
+
+		if(arcusReplEnabled) {
+
+		} else {
+
+			for(MemcachedNode node : ((ArcusKetamaNodeLocator)locator).getAllMigrationNodes()) {
+				if(addrs.contains((InetSocketAddress)node.getSocketAddress())) {
+					addrs.remove((InetSocketAddress)node.getSocketAddress());
+				}
+
+				for(InetSocketAddress addr : addrs) {
+					attachNode.add(attachMemcachedNode(addr));
+				}
+
+				// TODO :: update migration Locator by migration Mode
+				((ArcusKetamaNodeLocator)locator).updateMigration(attachNode, _migrationMode);
+			}
+
+			// Thinking about what should do more
+		}
+	}
+
+
+	// migrate from migration hash ring to main hash ring
+	private void migrate(MemcachedNode node, String response) {
+
+		if(arcusReplEnabled) {
+			//((ArcusReplKetamaNodeLocator)locator).migrateHash();
+		} else {
+			((ArcusKetamaNodeLocator)locator).migrateHash(node, response, _migrationMode);
+		}
+
+		/* Retry the Operation */
+	}
 	
 	/* ENABLE_REPLICATION if */
 	private void switchoverMemcachedReplGroup(MemcachedNode node) {
@@ -619,8 +664,30 @@ public final class MemcachedConnection extends SpyObject {
 		updateConnections(AddrUtil.getAddresses(addrs));
 		*/
 		/* ENABLE_REPLICATION end */
-	}	
-	
+	}
+
+    public void putMigrationQueue(String addrs, MigrationMode mode) {
+        _migrationManageQueue.offer(addrs);
+        _migrationMode = mode;
+
+    }
+
+    public void handleMigrationManageQueue() throws IOException {
+	    if(_migrationManageQueue.isEmpty()) {
+	        return;
+        }
+
+        String addrs = _migrationManageQueue.poll();
+
+	    // Do Update Migration Hash Ring
+	    if(arcusReplEnabled) {
+			//updateMigrations(ArcusReplNodeAddress.getAddresses(addrs));
+        } else {
+			updateMigrations(AddrUtil.getAddresses(addrs));
+        }
+    }
+
+
 	// Handle any requests that have been made against the client.
 	private void handleInputQueue() {
 		if(!addedQueue.isEmpty()) {
@@ -1262,6 +1329,11 @@ public final class MemcachedConnection extends SpyObject {
 	public int getAddedQueueSize() {
 		return addedQueue.size();
 	}
+
+	public MigrationMode getMigrationMode() {
+		return _migrationMode;
+	}
+
 	/* ENABLE_REPLICATION if */
 	
 	private interface Task {

@@ -17,22 +17,23 @@
 package net.spy.memcached;
 
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
-import java.util.TreeMap;
+import java.util.*;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
 import net.spy.memcached.compat.SpyObject;
+import net.spy.memcached.internal.MigrationMode;
 import net.spy.memcached.util.ArcusKetamaNodeLocatorConfiguration;
 
 public class ArcusKetamaNodeLocator extends SpyObject implements NodeLocator {
 
 	TreeMap<Long, MemcachedNode> ketamaNodes;
 	Collection<MemcachedNode> allNodes;
+
+	/* ENABLE_MIGRATION if */
+	TreeMap<Long, MemcachedNode> migrationKetamaNodes;
+	Collection<MemcachedNode> allMigrationNodes;
+	/* ENABLE_MIGRATION end */
 
 	HashAlgorithm hashAlg;
 	ArcusKetamaNodeLocatorConfiguration config;
@@ -50,6 +51,9 @@ public class ArcusKetamaNodeLocator extends SpyObject implements NodeLocator {
 		hashAlg = alg;
 		ketamaNodes = new TreeMap<Long, MemcachedNode>();
 		config = conf;
+
+		migrationKetamaNodes = new TreeMap<Long, MemcachedNode>();
+		allMigrationNodes = new ArrayList<MemcachedNode>();
 
 		int numReps = config.getNodeRepetitions();
 		for (MemcachedNode node : nodes) {
@@ -78,6 +82,10 @@ public class ArcusKetamaNodeLocator extends SpyObject implements NodeLocator {
 
 	public Collection<MemcachedNode> getAll() {
 		return allNodes;
+	}
+
+	public Collection<MemcachedNode> getAllMigrationNodes() {
+		return allMigrationNodes;
 	}
 
 	public MemcachedNode getPrimary(final String k) {
@@ -208,6 +216,125 @@ public class ArcusKetamaNodeLocator extends SpyObject implements NodeLocator {
 		if (remove) {
 			config.removeNode(node);
 		}
+	}
+
+	private void updateMigrationHash(MemcachedNode node) {
+
+		// Ketama does some special work with md5 where it reuses chunks.
+		for (int i = 0; i < config.getNodeRepetitions() / 4; i++) {
+
+			byte[] digest = HashAlgorithm.computeMd5(config.getKeyForNode(node, i));
+			for (int h = 0; h < 4; h++) {
+				Long k = ((long) (digest[3 + h * 4] & 0xFF) << 24)
+						| ((long) (digest[2 + h * 4] & 0xFF) << 16)
+						| ((long) (digest[1 + h * 4] & 0xFF) << 8)
+						| (digest[h * 4] & 0xFF);
+
+				migrationKetamaNodes.put(k, node);
+			}
+		}
+	}
+
+	public void updateMigration(Collection<MemcachedNode> toAttach, MigrationMode mode) {
+		switch (mode) {
+		case Join:
+			for(MemcachedNode node : toAttach) {
+				allMigrationNodes.add(node);
+				updateMigrationHash(node);
+			}
+			break;
+		case Leave:
+			for(MemcachedNode node : toAttach) {
+				allMigrationNodes.add(node);
+				updateMigrationHash(node);
+			}
+			break;
+		}
+	}
+
+	public void migrateHash(MemcachedNode node, String response, MigrationMode mode) {
+		long[] hpoint = new long[2];
+
+		String[] splitedResponse = response.split(" ");
+
+		if (splitedResponse[0].equals("NOT_MY_KEY")) {
+			// It is not NOT_MY_KEY
+			return;
+		}
+
+		/* get key set */
+		hpoint[0] = Long.valueOf(splitedResponse[1]);
+		hpoint[1] = Long.valueOf(splitedResponse[2]);
+
+		NavigableSet keySet = migrationKetamaNodes.navigableKeySet();
+		Set subset = keySet.subSet(migrationKetamaNodes.ceilingKey(hpoint[0]), migrationKetamaNodes.floorKey(hpoint[1]));
+		Long[] keys = (Long [])subset.toArray(new Long[subset.size()]);
+
+		switch (mode) {
+		case Join:
+			/* join all or partial hash slices from migrationKetamaNodes to ketamaNodes */
+
+			//TODO : parse the response string and get the range of hash point
+
+			if(migrationKetamaNodes != null && !migrationKetamaNodes.isEmpty()) {
+
+				lock.lock();
+				try {
+					for (int i = 0; i < keys.length; i++) {
+						MemcachedNode removed = migrationKetamaNodes.remove(keys[i]);
+
+						if (removed != null) {
+							ketamaNodes.put(keys[i], removed);
+						} else {
+							// The node does not exist.
+						}
+					}
+				} catch (IndexOutOfBoundsException e) {
+					e.printStackTrace(); // optional
+				} finally {
+					lock.unlock();
+				}
+			} else {
+				// ERROR : Migration Hash Ring is null or empty
+			}
+
+			if(migrationKetamaNodes.isEmpty()) {
+				/* means fully migrated */
+
+				allMigrationNodes.clear();
+			}
+
+			break;
+		case Leave:
+			/* leave all or partial hash slices from migrationKetamaNodes to ketamaNodes */
+			if(migrationKetamaNodes != null && !migrationKetamaNodes.isEmpty()) {
+
+				lock.lock();
+				try {
+					for (int i = keys.length - 1; i >= 0 ; i--) {
+						MemcachedNode removed = migrationKetamaNodes.remove(keys[i]);
+
+						if (removed != null) {
+							ketamaNodes.remove(keys[i]);
+						} else {
+							// The node does not exist.
+						}
+					}
+				} catch (IndexOutOfBoundsException e) {
+					e.printStackTrace(); // optinal
+				} finally {
+					lock.unlock();
+				}
+			} else {
+				// ERROR : Migration Hash Ring is null or empty
+			}
+
+			if(migrationKetamaNodes.isEmpty()) {
+				allMigrationNodes.clear();
+			}
+			break;
+		}
+
 	}
 
 	class KetamaIterator implements Iterator<MemcachedNode> {
