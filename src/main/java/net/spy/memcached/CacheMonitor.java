@@ -21,6 +21,7 @@ import java.util.List;
 import net.spy.memcached.compat.SpyObject;
 
 import org.apache.zookeeper.AsyncCallback.ChildrenCallback;
+import org.apache.zookeeper.KeeperException;
 import org.apache.zookeeper.KeeperException.Code;
 import org.apache.zookeeper.WatchedEvent;
 import org.apache.zookeeper.Watcher;
@@ -131,6 +132,21 @@ public class CacheMonitor extends SpyObject implements Watcher,
 		}
 		
 		zk.getChildren(cacheListZPath + serviceCode, this, this, null);
+	}
+
+	public List<String> getCacheList() {
+		List<String> cacheList = null;
+		try {
+			cacheList = zk.getChildren(cacheListZPath + serviceCode, false);
+		} catch (KeeperException e) {
+			getLogger().error("Can't get cache list. " + e.getMessage());
+			shutdown();
+		} catch (InterruptedException e) {
+			getLogger().error("Arcus Cache Monitor is interrupted : %s" , e.getMessage());
+			shutdown();
+		}
+
+		return cacheList;
 	}
 
 	/**

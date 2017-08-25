@@ -29,6 +29,7 @@ import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
 import net.spy.memcached.compat.SpyObject;
+import net.spy.memcached.internal.MigrationMode;
 import net.spy.memcached.util.ArcusReplKetamaNodeLocatorConfiguration;
 
 public class ArcusReplKetamaNodeLocator extends SpyObject implements NodeLocator {
@@ -36,6 +37,10 @@ public class ArcusReplKetamaNodeLocator extends SpyObject implements NodeLocator
 	private TreeMap<Long, MemcachedReplicaGroup> ketamaGroups;
 	private HashMap<String, MemcachedReplicaGroup> allGroups;
 	private Collection<MemcachedNode> allNodes;
+
+	private TreeMap<Long, MemcachedReplicaGroup> migrationKetamaGroups;
+	private HashMap<String, MemcachedReplicaGroup> allMigrationGroups;
+	private Collection<MemcachedNode> allMigrationNodes;
 
 	private HashAlgorithm hashAlg;
 	private ArcusReplKetamaNodeLocatorConfiguration config;
@@ -304,6 +309,26 @@ public class ArcusReplKetamaNodeLocator extends SpyObject implements NodeLocator
 					ketamaGroups.put(k, group);
 			}
 		}
+	}
+
+	private void updateMigrationHash(MemcachedReplicaGroup group) {
+
+	}
+
+	private void updateMigration(Collection<MemcachedReplicaGroup> toAttach/*thinking about it*/) {
+
+	}
+
+	public void migrateHash(MigrationMode mode) {
+		switch (mode) {
+			case Join:
+			/* join all or partial hash slices from migrationKetamaNodes to ketamaNodes */
+				break;
+			case Leave:
+			/* leave all or partial hash slices from migrationKetamaNodes to ketamaNodes */
+				break;
+		}
+
 	}
 
 	private class ReplKetamaIterator implements Iterator<MemcachedNode> {
